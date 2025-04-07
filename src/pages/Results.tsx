@@ -2,16 +2,19 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import ResultsTable from '../components/ResultsTable';
-import { get_recommendations, Assessment } from '../data/assessments';
+import { useSemanticSearch } from '../hooks/useSemanticSearch';
+import { Assessment } from '../types/assessment';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Loader2 } from 'lucide-react';
+import { toast } from '@/components/ui/use-toast';
 
 const Results: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const query = searchParams.get('query') || '';
+  const { performSearch, isInitializing, error: serviceError } = useSemanticSearch();
   const [recommendations, setRecommendations] = useState<Assessment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -22,24 +25,51 @@ const Results: React.FC = () => {
       return;
     }
 
-    // Simulate API call with delay
     const fetchRecommendations = async () => {
       try {
         setLoading(true);
-        // Simulate network delay
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        const results = get_recommendations(query);
-        setRecommendations(results as Assessment[]);
+        
+        if (isInitializing) {
+          // Wait a bit to see if initialization completes
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          if (serviceError) {
+            throw new Error(serviceError);
+          }
+        }
+        
+        const results = await performSearch(query);
+        
+        // Convert search results to Assessment format
+        const assessments: Assessment[] = results.map((result, index) => ({
+          id: `result-${index}`,
+          name: result.title,
+          url: result.link,
+          type: 'Assessment', // Default type since we don't have this in our JSON
+          duration: 'Varies',  // Default duration
+          remote_support: 'Yes', // Default
+          adaptive: 'Varies',  // Default
+        }));
+        
+        setRecommendations(assessments);
+        
+        if (assessments.length === 0) {
+          setError('No matching assessments found. Please try a different query.');
+        }
       } catch (err) {
-        setError('Failed to fetch recommendations. Please try again.');
-        console.error('Error fetching recommendations:', err);
+        console.error('Error in semantic search:', err);
+        setError(err instanceof Error ? err.message : 'Failed to fetch recommendations. Please try again.');
+        toast({
+          title: "Search Error",
+          description: "There was a problem with your search. Please try again.",
+          variant: "destructive"
+        });
       } finally {
         setLoading(false);
       }
     };
 
     fetchRecommendations();
-  }, [query, navigate]);
+  }, [query, navigate, performSearch, isInitializing, serviceError]);
 
   return (
     <div className="min-h-screen flex flex-col">
