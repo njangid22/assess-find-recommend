@@ -1,5 +1,4 @@
 
-import { pipeline } from '@huggingface/transformers';
 import { AssessmentData } from '../types/assessment';
 
 // Interface for search results
@@ -11,98 +10,79 @@ export interface SearchResult {
 }
 
 export class SemanticSearchService {
-  private model: any = null;
-  private isLoading: boolean = false;
   private assessments: AssessmentData[] = [];
-  private assessmentEmbeddings: number[][] = [];
+  private initialized: boolean = false;
 
   constructor(assessments: AssessmentData[]) {
     this.assessments = assessments;
+    this.initialized = true; // Simple initialization without model loading
+    console.log('Semantic search service initialized with fallback mechanism');
   }
 
   async initialize(): Promise<void> {
-    if (this.model !== null || this.isLoading) return;
+    // We're using a simple keyword-based search as fallback
+    // No initialization needed
+    this.initialized = true;
+    return Promise.resolve();
+  }
+
+  private calculateRelevanceScore(query: string, assessment: AssessmentData): number {
+    // Simple keyword matching algorithm instead of embeddings
+    const queryLower = query.toLowerCase();
+    const titleLower = assessment.title.toLowerCase();
+    const descLower = assessment.description.toLowerCase();
     
-    this.isLoading = true;
-    try {
-      console.log('Loading feature extraction model...');
-      this.model = await pipeline(
-        'feature-extraction',
-        'mixedbread-ai/mxbai-embed-xsmall-v1'
-      );
-      
-      console.log('Computing embeddings for all assessments...');
-      // Pre-compute embeddings for all assessments
-      for (const assessment of this.assessments) {
-        const text = `${assessment.title} ${assessment.description}`;
-        const embedding = await this.getEmbedding(text);
-        this.assessmentEmbeddings.push(embedding);
+    // Calculate a score based on keyword presence
+    let score = 0;
+    
+    // Split query into words
+    const queryWords = queryLower.split(/\s+/).filter(word => word.length > 2);
+    
+    // Score based on word matches in title and description
+    for (const word of queryWords) {
+      if (titleLower.includes(word)) {
+        score += 3; // Title matches are weighted higher
       }
-      console.log('Embeddings computation complete');
-    } catch (error) {
-      console.error('Error initializing semantic search:', error);
-      throw error;
-    } finally {
-      this.isLoading = false;
-    }
-  }
-
-  private async getEmbedding(text: string): Promise<number[]> {
-    if (!this.model) {
-      throw new Error('Model not initialized. Call initialize() first.');
-    }
-
-    try {
-      const result = await this.model(text, { pooling: 'mean', normalize: true });
-      return Array.from(result.data);
-    } catch (error) {
-      console.error('Error getting embedding:', error);
-      throw error;
-    }
-  }
-
-  private computeCosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length) {
-      throw new Error('Vectors must be of the same length');
+      if (descLower.includes(word)) {
+        score += 1;
+      }
     }
     
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-    
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
+    // Exact phrase matches get bonus points
+    if (titleLower.includes(queryLower)) {
+      score += 5;
+    }
+    if (descLower.includes(queryLower)) {
+      score += 2;
     }
     
-    if (normA === 0 || normB === 0) {
-      return 0;
-    }
-    
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+    return score;
   }
 
   async search(query: string, topK: number = 5): Promise<SearchResult[]> {
-    if (!this.model) {
+    if (!this.initialized) {
       await this.initialize();
     }
 
     try {
       console.log(`Searching for: "${query}"`);
-      const queryEmbedding = await this.getEmbedding(query);
       
-      // Compute similarity with all assessments
-      const similarities = this.assessmentEmbeddings.map((embedding, index) => ({
-        assessment: this.assessments[index],
-        similarity: this.computeCosineSimilarity(queryEmbedding, embedding)
-      }));
+      // For each assessment, calculate a relevance score
+      const scoredResults = this.assessments.map(assessment => {
+        const relevanceScore = this.calculateRelevanceScore(query, assessment);
+        return {
+          assessment,
+          similarity: relevanceScore
+        };
+      });
       
-      // Sort by similarity (highest first)
-      similarities.sort((a, b) => b.similarity - a.similarity);
+      // Sort by score (highest first) and filter out zero scores
+      const rankedResults = scoredResults
+        .filter(item => item.similarity > 0)
+        .sort((a, b) => b.similarity - a.similarity);
       
       // Return top K results
-      return similarities.slice(0, topK).map(item => ({
+      return rankedResults.slice(0, topK).map(item => ({
         title: item.assessment.title,
         description: item.assessment.description,
         link: item.assessment.link,
@@ -110,7 +90,7 @@ export class SemanticSearchService {
       }));
     } catch (error) {
       console.error('Error during search:', error);
-      throw error;
+      throw new Error('Failed to complete search. Please try again.');
     }
   }
 }
