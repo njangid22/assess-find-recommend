@@ -1,4 +1,5 @@
 
+import { pipeline } from '@huggingface/transformers';
 import { AssessmentData } from '../types/assessment';
 
 // Interface for search results
@@ -10,140 +11,106 @@ export interface SearchResult {
 }
 
 export class SemanticSearchService {
+  private model: any = null;
+  private isLoading: boolean = false;
   private assessments: AssessmentData[] = [];
-  private initialized: boolean = false;
+  private assessmentEmbeddings: number[][] = [];
 
   constructor(assessments: AssessmentData[]) {
     this.assessments = assessments;
-    this.initialized = true;
-    console.log('Search service initialized with keyword matching');
   }
 
   async initialize(): Promise<void> {
-    // Simple initialization with no model loading
-    this.initialized = true;
-    return Promise.resolve();
-  }
-
-  private extractKeywords(text: string): string[] {
-    // Extract words with at least 4 characters, converting to lowercase
-    // and removing common words like 'and', 'the', 'for', etc.
-    const stopWords = ['and', 'the', 'for', 'with', 'this', 'that', 'from', 'your'];
+    if (this.model !== null || this.isLoading) return;
     
-    // Extract words, remove punctuation
-    return text.toLowerCase()
-      .replace(/[^\w\s]/g, '') // Remove punctuation
-      .split(/\s+/)
-      .filter(word => 
-        word.length >= 4 && !stopWords.includes(word)
+    this.isLoading = true;
+    try {
+      console.log('Loading feature extraction model...');
+      this.model = await pipeline(
+        'feature-extraction',
+        'mixedbread-ai/mxbai-embed-xsmall-v1'
       );
+      
+      console.log('Computing embeddings for all assessments...');
+      // Pre-compute embeddings for all assessments
+      for (const assessment of this.assessments) {
+        const text = `${assessment.title} ${assessment.description}`;
+        const embedding = await this.getEmbedding(text);
+        this.assessmentEmbeddings.push(embedding);
+      }
+      console.log('Embeddings computation complete');
+    } catch (error) {
+      console.error('Error initializing semantic search:', error);
+      throw error;
+    } finally {
+      this.isLoading = false;
+    }
   }
 
-  private calculateRelevanceScore(query: string, assessment: AssessmentData): number {
-    // Extract keywords from query and assessment content
-    const queryKeywords = this.extractKeywords(query);
-    const titleKeywords = this.extractKeywords(assessment.title);
-    const descKeywords = this.extractKeywords(assessment.description || '');
-    
-    if (queryKeywords.length === 0) {
-      return 0; // No valid keywords to match
+  private async getEmbedding(text: string): Promise<number[]> {
+    if (!this.model) {
+      throw new Error('Model not initialized. Call initialize() first.');
     }
-    
-    // Calculate score based on keyword matches
-    let score = 0;
-    let matchCount = 0;
-    
-    for (const keyword of queryKeywords) {
-      // Check for exact or partial matches in title (more weight)
-      for (const titleWord of titleKeywords) {
-        if (titleWord.includes(keyword) || keyword.includes(titleWord)) {
-          score += 3;
-          matchCount++;
-          break;
-        }
-      }
-      
-      // Check for exact or partial matches in description
-      for (const descWord of descKeywords) {
-        if (descWord.includes(keyword) || keyword.includes(descWord)) {
-          score += 1;
-          matchCount++;
-          break;
-        }
-      }
-      
-      // Direct match in full text
-      if (assessment.title.toLowerCase().includes(keyword)) {
-        score += 2;
-      }
-      if ((assessment.description || '').toLowerCase().includes(keyword)) {
-        score += 1;
-      }
+
+    try {
+      const result = await this.model(text, { pooling: 'mean', normalize: true });
+      return Array.from(result.data);
+    } catch (error) {
+      console.error('Error getting embedding:', error);
+      throw error;
     }
-    
-    // Bonus for matching ratio (what percentage of query keywords were found)
-    const matchRatio = matchCount / queryKeywords.length;
-    score += matchRatio * 5;
-    
-    return score;
   }
 
-  // Get random assessments as a fallback
-  private getRandomAssessments(count: number = 5): SearchResult[] {
-    // Shuffle array and take first 'count' elements
-    const shuffled = [...this.assessments]
-      .sort(() => 0.5 - Math.random())
-      .slice(0, count);
+  private computeCosineSimilarity(a: number[], b: number[]): number {
+    if (a.length !== b.length) {
+      throw new Error('Vectors must be of the same length');
+    }
     
-    return shuffled.map(assessment => ({
-      title: assessment.title,
-      description: assessment.description,
-      link: assessment.link,
-      similarity: 1 // Default similarity for random results
-    }));
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    
+    for (let i = 0; i < a.length; i++) {
+      dotProduct += a[i] * b[i];
+      normA += a[i] * a[i];
+      normB += b[i] * b[i];
+    }
+    
+    if (normA === 0 || normB === 0) {
+      return 0;
+    }
+    
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
   async search(query: string, topK: number = 5): Promise<SearchResult[]> {
+    if (!this.model) {
+      await this.initialize();
+    }
+
     try {
       console.log(`Searching for: "${query}"`);
+      const queryEmbedding = await this.getEmbedding(query);
       
-      // If query is empty or too short, return random results
-      if (!query || query.trim().length < 3) {
-        console.log('Query too short, returning random results');
-        return this.getRandomAssessments(topK);
-      }
+      // Compute similarity with all assessments
+      const similarities = this.assessmentEmbeddings.map((embedding, index) => ({
+        assessment: this.assessments[index],
+        similarity: this.computeCosineSimilarity(queryEmbedding, embedding)
+      }));
       
-      // For each assessment, calculate a relevance score
-      const scoredResults = this.assessments.map(assessment => {
-        const relevanceScore = this.calculateRelevanceScore(query, assessment);
-        return {
-          assessment,
-          similarity: relevanceScore
-        };
-      });
-      
-      // Sort by score (highest first) and filter out zero scores
-      const rankedResults = scoredResults
-        .filter(item => item.similarity > 0)
-        .sort((a, b) => b.similarity - a.similarity);
-      
-      // If no results found, return random assessments
-      if (rankedResults.length === 0) {
-        console.log('No results found, returning random assessments');
-        return this.getRandomAssessments(topK);
-      }
+      // Sort by similarity (highest first)
+      similarities.sort((a, b) => b.similarity - a.similarity);
       
       // Return top K results
-      return rankedResults.slice(0, topK).map(item => ({
+      return similarities.slice(0, topK).map(item => ({
         title: item.assessment.title,
         description: item.assessment.description,
         link: item.assessment.link,
         similarity: item.similarity
       }));
     } catch (error) {
-      console.error('Error during search, falling back to random results:', error);
-      // If any error occurs during search, fall back to random results
-      return this.getRandomAssessments(topK);
+      console.error('Error during search:', error);
+      throw error;
     }
   }
 }
