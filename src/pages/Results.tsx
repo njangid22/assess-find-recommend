@@ -34,11 +34,21 @@ const Results: React.FC = () => {
         
         // Short delay to ensure the service has time to initialize
         if (isInitializing && !isReady) {
-          await new Promise(resolve => setTimeout(resolve, 800));
+          await new Promise(resolve => setTimeout(resolve, 300));
         }
         
-        // Even with service error, we still attempt search for random results
+        // Perform the search
+        console.log("Performing search for query:", query);
         const results = await performSearch(query);
+        console.log("Search results:", results);
+        
+        if (results.length === 0) {
+          toast({
+            title: "No matches found",
+            description: "Showing some recommended assessments instead.",
+            variant: "default"
+          });
+        }
         
         // Convert search results to Assessment format
         const assessments: Assessment[] = results.map((result, index) => ({
@@ -54,14 +64,6 @@ const Results: React.FC = () => {
         setRecommendations(assessments);
         setHasAttemptedSearch(true);
         
-        if (serviceError) {
-          // Show a less alarming toast for fallback results
-          toast({
-            title: "Note",
-            description: "Showing recommended assessments based on your query.",
-            variant: "default"
-          });
-        }
       } catch (err) {
         console.error('Error in search:', err);
         setError('Unable to process your search. Showing recommended assessments.');
@@ -102,18 +104,35 @@ const Results: React.FC = () => {
       }
     };
 
-    // Set a timeout to prevent hanging UI
+    // Set a timeout to prevent hanging UI (reduced to 3 seconds)
     const timeoutId = setTimeout(() => {
       if (loading && !hasAttemptedSearch) {
         setLoading(false);
-        setError('Search is taking too long. Please try again.');
-        toast({
-          title: "Timeout",
-          description: "Search took too long. Please try again.",
-          variant: "destructive"
+        setError('Search is taking too long. Showing recommended assessments.');
+        
+        // Force fetch some results to display something
+        performSearch('').then(randomResults => {
+          const fallbackAssessments: Assessment[] = randomResults.map((result, index) => ({
+            id: `timeout-${index}`,
+            name: result.title,
+            url: result.link,
+            type: 'Assessment',
+            duration: 'Varies',
+            remote_support: 'Yes',
+            adaptive: 'Varies',
+          }));
+          
+          setRecommendations(fallbackAssessments);
+          setHasAttemptedSearch(true);
+          
+          toast({
+            title: "Search Timeout",
+            description: "Showing recommended assessments instead.",
+            variant: "default"
+          });
         });
       }
-    }, 5000);
+    }, 3000);
 
     fetchRecommendations();
 

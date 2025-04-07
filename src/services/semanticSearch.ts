@@ -12,59 +12,78 @@ export interface SearchResult {
 export class SemanticSearchService {
   private assessments: AssessmentData[] = [];
   private initialized: boolean = false;
-  private modelLoaded: boolean = false;
 
   constructor(assessments: AssessmentData[]) {
     this.assessments = assessments;
     this.initialized = true;
-    console.log('Semantic search service initialized');
+    console.log('Search service initialized with keyword matching');
   }
 
   async initialize(): Promise<void> {
-    // We're using a simple initialization
-    // If we had a model, we'd load it here
-    try {
-      // Simulate model loading with a quick timeout
-      await new Promise(resolve => setTimeout(resolve, 500));
-      this.modelLoaded = true;
-    } catch (error) {
-      console.error('Failed to load model, will use fallback', error);
-      this.modelLoaded = false;
-    }
-    
+    // Simple initialization with no model loading
     this.initialized = true;
     return Promise.resolve();
   }
 
+  private extractKeywords(text: string): string[] {
+    // Extract words with at least 4 characters, converting to lowercase
+    // and removing common words like 'and', 'the', 'for', etc.
+    const stopWords = ['and', 'the', 'for', 'with', 'this', 'that', 'from', 'your'];
+    
+    // Extract words, remove punctuation
+    return text.toLowerCase()
+      .replace(/[^\w\s]/g, '') // Remove punctuation
+      .split(/\s+/)
+      .filter(word => 
+        word.length >= 4 && !stopWords.includes(word)
+      );
+  }
+
   private calculateRelevanceScore(query: string, assessment: AssessmentData): number {
-    // Simple keyword matching algorithm
-    const queryLower = query.toLowerCase();
-    const titleLower = assessment.title.toLowerCase();
-    const descLower = assessment.description.toLowerCase();
+    // Extract keywords from query and assessment content
+    const queryKeywords = this.extractKeywords(query);
+    const titleKeywords = this.extractKeywords(assessment.title);
+    const descKeywords = this.extractKeywords(assessment.description || '');
     
-    // Calculate a score based on keyword presence
+    if (queryKeywords.length === 0) {
+      return 0; // No valid keywords to match
+    }
+    
+    // Calculate score based on keyword matches
     let score = 0;
+    let matchCount = 0;
     
-    // Split query into words
-    const queryWords = queryLower.split(/\s+/).filter(word => word.length > 2);
-    
-    // Score based on word matches in title and description
-    for (const word of queryWords) {
-      if (titleLower.includes(word)) {
-        score += 3; // Title matches are weighted higher
+    for (const keyword of queryKeywords) {
+      // Check for exact or partial matches in title (more weight)
+      for (const titleWord of titleKeywords) {
+        if (titleWord.includes(keyword) || keyword.includes(titleWord)) {
+          score += 3;
+          matchCount++;
+          break;
+        }
       }
-      if (descLower.includes(word)) {
+      
+      // Check for exact or partial matches in description
+      for (const descWord of descKeywords) {
+        if (descWord.includes(keyword) || keyword.includes(descWord)) {
+          score += 1;
+          matchCount++;
+          break;
+        }
+      }
+      
+      // Direct match in full text
+      if (assessment.title.toLowerCase().includes(keyword)) {
+        score += 2;
+      }
+      if ((assessment.description || '').toLowerCase().includes(keyword)) {
         score += 1;
       }
     }
     
-    // Exact phrase matches get bonus points
-    if (titleLower.includes(queryLower)) {
-      score += 5;
-    }
-    if (descLower.includes(queryLower)) {
-      score += 2;
-    }
+    // Bonus for matching ratio (what percentage of query keywords were found)
+    const matchRatio = matchCount / queryKeywords.length;
+    score += matchRatio * 5;
     
     return score;
   }
@@ -85,10 +104,6 @@ export class SemanticSearchService {
   }
 
   async search(query: string, topK: number = 5): Promise<SearchResult[]> {
-    if (!this.initialized) {
-      await this.initialize();
-    }
-
     try {
       console.log(`Searching for: "${query}"`);
       

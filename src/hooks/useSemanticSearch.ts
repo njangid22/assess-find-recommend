@@ -12,12 +12,12 @@ export const useSemanticSearch = () => {
   useEffect(() => {
     const initializeSearch = async () => {
       try {
-        console.log('Initializing semantic search service...');
+        console.log('Initializing keyword-based search service...');
         const service = new SemanticSearchService(assessmentsData);
         await service.initialize();
         setSearchService(service);
         setIsReady(true);
-        console.log('Semantic search service initialized successfully');
+        console.log('Search service initialized successfully');
       } catch (err) {
         console.error('Failed to initialize search service:', err);
         // Even if initialization fails, we still set searchService with a fallback mechanism
@@ -34,7 +34,7 @@ export const useSemanticSearch = () => {
 
     initializeSearch();
     
-    // Set a timeout to force ready state after 3 seconds to prevent hanging
+    // Set a timeout to force ready state after 1 second to prevent hanging
     const timeoutId = setTimeout(() => {
       if (!isReady && isInitializing) {
         setIsInitializing(false);
@@ -45,7 +45,7 @@ export const useSemanticSearch = () => {
           setSearchService(fallbackService);
         }
       }
-    }, 3000);
+    }, 1000); // Reduced from 3000ms to 1000ms for faster response
     
     return () => clearTimeout(timeoutId);
   }, []);
