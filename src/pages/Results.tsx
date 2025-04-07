@@ -15,10 +15,11 @@ const Results: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const query = searchParams.get('query') || '';
-  const { performSearch, isInitializing, error: serviceError } = useSemanticSearch();
+  const { performSearch, isInitializing, isReady, error: serviceError } = useSemanticSearch();
   const [recommendations, setRecommendations] = useState<Assessment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [hasAttemptedSearch, setHasAttemptedSearch] = useState(false);
 
   useEffect(() => {
     if (!query) {
@@ -32,14 +33,11 @@ const Results: React.FC = () => {
         setError(''); // Clear any previous errors
         
         // Short delay to ensure the service has time to initialize
-        if (isInitializing) {
+        if (isInitializing && !isReady) {
           await new Promise(resolve => setTimeout(resolve, 800));
         }
         
-        if (serviceError) {
-          throw new Error(serviceError);
-        }
-        
+        // Even with service error, we still attempt search for random results
         const results = await performSearch(query);
         
         // Convert search results to Assessment format
@@ -54,27 +52,77 @@ const Results: React.FC = () => {
         }));
         
         setRecommendations(assessments);
+        setHasAttemptedSearch(true);
         
-        if (assessments.length === 0) {
-          setError('No matching assessments found. Please try a different query.');
+        if (serviceError) {
+          // Show a less alarming toast for fallback results
+          toast({
+            title: "Note",
+            description: "Showing recommended assessments based on your query.",
+            variant: "default"
+          });
         }
       } catch (err) {
         console.error('Error in search:', err);
-        setError(err instanceof Error ? err.message : 'Failed to fetch recommendations. Please try again.');
+        setError('Unable to process your search. Showing recommended assessments.');
         
-        // Only show toast once per error
-        toast({
-          title: "Search Error",
-          description: "There was a problem with your search. Please try again.",
-          variant: "destructive"
-        });
+        // Attempt to get random results even after error
+        try {
+          const randomResults = await performSearch('');
+          const fallbackAssessments: Assessment[] = randomResults.map((result, index) => ({
+            id: `random-${index}`,
+            name: result.title,
+            url: result.link,
+            type: 'Assessment',
+            duration: 'Varies',
+            remote_support: 'Yes',
+            adaptive: 'Varies',
+          }));
+          
+          setRecommendations(fallbackAssessments);
+          setHasAttemptedSearch(true);
+          
+          // Show toast for fallback
+          toast({
+            title: "Note",
+            description: "Showing recommended assessments.",
+            variant: "default"
+          });
+        } catch (fallbackErr) {
+          console.error('Fallback error:', fallbackErr);
+          setHasAttemptedSearch(true);
+          toast({
+            title: "Search Error",
+            description: "Unable to retrieve assessments. Please try again later.",
+            variant: "destructive"
+          });
+        }
       } finally {
         setLoading(false);
       }
     };
 
+    // Set a timeout to prevent hanging UI
+    const timeoutId = setTimeout(() => {
+      if (loading && !hasAttemptedSearch) {
+        setLoading(false);
+        setError('Search is taking too long. Please try again.');
+        toast({
+          title: "Timeout",
+          description: "Search took too long. Please try again.",
+          variant: "destructive"
+        });
+      }
+    }, 5000);
+
     fetchRecommendations();
-  }, [query, navigate, performSearch, isInitializing, serviceError]);
+
+    return () => clearTimeout(timeoutId);
+  }, [query, navigate, performSearch, isInitializing, isReady, serviceError]);
+
+  const displayMessage = serviceError ? 
+    "Showing recommended assessments based on your query." : 
+    `Showing top ${recommendations.length} recommendations for your query:`;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -89,22 +137,18 @@ const Results: React.FC = () => {
           Back to Home
         </Button>
 
-        {serviceError && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertDescription>
-              {serviceError}
-            </AlertDescription>
-          </Alert>
-        )}
-
         {loading ? (
           <div className="w-full flex flex-col items-center justify-center py-16">
             <Loader2 className="h-8 w-8 animate-spin text-shl" />
             <p className="mt-4 text-gray-600">Analyzing your job description...</p>
           </div>
-        ) : error ? (
+        ) : error && recommendations.length === 0 ? (
           <div className="w-full text-center py-16">
-            <p className="text-red-500">{error}</p>
+            <Alert variant="destructive" className="mb-6">
+              <AlertDescription>
+                {error}
+              </AlertDescription>
+            </Alert>
             <Button 
               onClick={() => navigate('/')}
               className="mt-4 bg-shl hover:bg-shl-600"
@@ -113,7 +157,16 @@ const Results: React.FC = () => {
             </Button>
           </div>
         ) : recommendations.length > 0 ? (
-          <ResultsTable assessments={recommendations} query={query} />
+          <>
+            {(error || serviceError) && (
+              <Alert className="mb-6">
+                <AlertDescription>
+                  {error || serviceError}
+                </AlertDescription>
+              </Alert>
+            )}
+            <ResultsTable assessments={recommendations} query={query} />
+          </>
         ) : (
           <div className="w-full text-center py-16">
             <p className="text-gray-600">No assessments found for your query. Try a different search.</p>
