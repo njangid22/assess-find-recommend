@@ -1,12 +1,16 @@
-const { readFileSync } = require('fs');
-const { join } = require('path');
+const fs = require('fs');
+const path = require('path');
 const { SentenceTransformer } = require('sentence-transformers');
+const express = require('express');
+const app = express();
+const port = process.env.PORT || 3000;
 const model = new SentenceTransformer('all-MiniLM-L6-v2');
 
 // Load the dataset
-const dataset = JSON.parse(readFileSync(join(__dirname, 'path/to/your/dataset.json')));
+const datasetPath = path.join(__dirname, 'src/data/assessmentsData.json');
+const dataset = JSON.parse(fs.readFileSync(datasetPath, 'utf-8'));
 
-module.exports = async (req, res) => {
+app.get('/match', async (req, res) => {
   const query = req.query.q;
   if (!query) {
     return res.status(400).json({ error: 'Query parameter is required.' });
@@ -35,4 +39,8 @@ module.exports = async (req, res) => {
   }));
 
   res.json({ results });
-};
+});
+
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
+});
