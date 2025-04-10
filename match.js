@@ -1,44 +1,57 @@
 const fs = require('fs');
 const path = require('path');
-const { SentenceTransformer } = require('sentence-transformers');
 const express = require('express');
+const { SemanticSearchService } = require('./semanticsearch');
 const app = express();
+
+app.use(express.json());
+
 const port = process.env.PORT || 3000;
-const model = new SentenceTransformer('all-MiniLM-L6-v2');
 
 // Load the dataset
 const datasetPath = path.join(__dirname, 'src/data/assessmentsData.json');
 const dataset = JSON.parse(fs.readFileSync(datasetPath, 'utf-8'));
+const searchService = new SemanticSearchService(dataset);
 
-app.get('/match', async (req, res) => {
-  const query = req.query.q;
+// Initialize embeddings on server startup
+(async () => {
+  try {
+    await searchService.initialize();
+    console.log('Semantic search service initialized successfully.');
+  } catch (error) {
+    console.error('Error initializing semantic search service:', error);
+  }
+})();
+
+// Health Check Endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy' });
+});
+
+// Assessment Recommendation Endpoint
+app.post('/recommend', async (req, res) => {
+  const { query } = req.body;
+
   if (!query) {
     return res.status(400).json({ error: 'Query parameter is required.' });
   }
 
-  // Compute embeddings for the query and the dataset
-  const queryEmbedding = await model.encode(query);
-  const datasetEmbeddings = await model.encode(dataset.map(item => item.description));
+  try {
+    const recommendations = await searchService.search(query, 10);
+    const formattedRecommendations = recommendations.map((rec) => ({
+      url: rec.link,
+      adaptive_support: 'No', // Placeholder, update based on your dataset
+      description: rec.description,
+      duration: 60, // Placeholder, update based on your dataset
+      remote_support: 'Yes', // Placeholder, update based on your dataset
+      test_type: ['Knowledge & Skills'], // Placeholder, update based on your dataset
+    }));
 
-  // Compute cosine similarities
-  const similarities = await util.cosineSimilarities(queryEmbedding, datasetEmbeddings);
-
-  // Get the top matches
-  const topK = Math.min(5, dataset.length);
-  const topResults = similarities
-    .map((score, idx) => ({ score, idx }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK);
-
-  // Prepare the results
-  const results = topResults.map(({ score, idx }) => ({
-    title: dataset[idx].title,
-    description: dataset[idx].description,
-    link: dataset[idx].link,
-    score
-  }));
-
-  res.json({ results });
+    res.status(200).json({ recommended_assessments: formattedRecommendations });
+  } catch (error) {
+    console.error('Error processing recommendation:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 app.listen(port, () => {
